@@ -1,0 +1,188 @@
+// backend/controllers/expenseController.js
+// ─────────────────────────────────────────
+// All business logic for the /api/expenses routes.
+// Each exported function maps 1-to-1 with a route handler.
+
+const { query } = require("../database/db");
+
+// ── GET /api/expenses ─────────────────────────────────────────────────────
+// Returns all expenses, newest first.
+const getAllExpenses = async (req, res) => {
+  try {
+    const { rows } = await query(
+      "SELECT * FROM expenses ORDER BY date DESC, created_at DESC"
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── GET /api/expenses/:id ─────────────────────────────────────────────────
+const getExpenseById = async (req, res) => {
+  try {
+    const { rows } = await query(
+      "SELECT * FROM expenses WHERE id = ?",
+      [req.params.id]
+    );
+    if (!rows.length)
+      return res.status(404).json({ success: false, message: "Expense not found" });
+    res.json({ success: true, data: rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── POST /api/expenses ────────────────────────────────────────────────────
+const addExpense = async (req, res) => {
+  const { title, amount, category, date, notes } = req.body;
+
+  // Validate required fields
+  if (!title || !amount || !date) {
+    return res.status(400).json({
+      success: false,
+      message: "title, amount, and date are required",
+    });
+  }
+  if (isNaN(amount) || Number(amount) <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "amount must be a positive number",
+    });
+  }
+
+  try {
+    const { rows } = await query(
+      `INSERT INTO expenses (title, amount, category, date, notes)
+       VALUES (?, ?, ?, ?, ?)`,
+      [title.trim(), Number(amount), category || "Other", date, notes || ""]
+    );
+    const inserted = await query("SELECT * FROM expenses WHERE id = ?", [
+      rows.insertId,
+    ]);
+    res.status(201).json({ success: true, data: inserted.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── PUT /api/expenses/:id ─────────────────────────────────────────────────
+const updateExpense = async (req, res) => {
+  const { title, amount, category, date, notes } = req.body;
+
+  if (!title || !amount || !date) {
+    return res.status(400).json({
+      success: false,
+      message: "title, amount, and date are required",
+    });
+  }
+  if (isNaN(amount) || Number(amount) <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "amount must be a positive number",
+    });
+  }
+
+  try {
+    const { rows } = await query(
+      `UPDATE expenses
+       SET title=?, amount=?, category=?, date=?, notes=?
+       WHERE id=?`,
+      [title.trim(), Number(amount), category || "Other", date, notes || "", req.params.id]
+    );
+    if (!rows.affectedRows)
+      return res.status(404).json({ success: false, message: "Expense not found" });
+
+    const updated = await query("SELECT * FROM expenses WHERE id = ?", [req.params.id]);
+    res.json({ success: true, data: updated.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── DELETE /api/expenses/:id ──────────────────────────────────────────────
+const deleteExpense = async (req, res) => {
+  try {
+    const { rows } = await query(
+      "DELETE FROM expenses WHERE id = ?",
+      [req.params.id]
+    );
+    if (!rows.affectedRows)
+      return res.status(404).json({ success: false, message: "Expense not found" });
+    res.json({ success: true, message: "Expense deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── GET /api/expenses/summary/monthly ─────────────────────────────────────
+// Returns total spending per month for the current year.
+const monthlySummary = async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT
+         DATE_FORMAT(date, '%Y-%m') AS month,
+         DATE_FORMAT(date, '%b %Y') AS label,
+         SUM(amount)                AS total,
+         COUNT(*)                   AS count
+       FROM expenses
+       WHERE YEAR(date) = YEAR(CURDATE())
+       GROUP BY month, label
+       ORDER BY month`
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── GET /api/expenses/summary/category ────────────────────────────────────
+// Returns total spending per category.
+const categorySummary = async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT
+         category,
+         SUM(amount) AS total,
+         COUNT(*)    AS count
+       FROM expenses
+       GROUP BY category
+       ORDER BY total DESC`
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── GET /api/expenses/summary/stats ───────────────────────────────────────
+// Dashboard KPIs: total, this month, today, highest single expense.
+const stats = async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT
+         SUM(amount)                                              AS total_all_time,
+         SUM(CASE WHEN MONTH(date)=MONTH(CURDATE()) AND
+                       YEAR(date)=YEAR(CURDATE())
+                  THEN amount ELSE 0 END)                        AS total_this_month,
+         SUM(CASE WHEN date = CURDATE() THEN amount ELSE 0 END)  AS total_today,
+         MAX(amount)                                              AS highest_expense,
+         COUNT(*)                                                 AS total_records
+       FROM expenses`
+    );
+    res.json({ success: true, data: rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = {
+  getAllExpenses,
+  getExpenseById,
+  addExpense,
+  updateExpense,
+  deleteExpense,
+  monthlySummary,
+  categorySummary,
+  stats,
+};
